@@ -9,19 +9,21 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.Table;
 
-@Entity(name = "user")
+@Entity
+@Table(name = "user")
 public class User {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "userID")
     private int userID;
 
-    @Column(name = "name", length = 50, nullable = false)
-    private String name;
-
     @Column(name = "email", length = 150, nullable = false)
     private String email;
+
+    @Column(name = "password", length = 255, nullable = false)
+    private String password;
 
     @ManyToOne
     @JoinColumn(name = "roleID", nullable = false)
@@ -35,10 +37,10 @@ public class User {
     }
 
     // Constructor con todos los campos
-    public User(int userID, String name, String email, Role roleID, LocalDateTime createdAt) {
+    public User(int userID, String email, String password, Role roleID, LocalDateTime createdAt) {
         this.userID = userID;
-        this.name = name;
         this.email = email;
+        this.password = password;
         this.roleID = roleID;
         this.createdAt = createdAt;
     }
@@ -52,20 +54,20 @@ public class User {
         this.userID = userID;
     }
 
-    public String getName() {
-        return name;
-    }
-
-    public void setName(String name) {
-        this.name = name;
-    }
-
     public String getEmail() {
         return email;
     }
 
     public void setEmail(String email) {
         this.email = email;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public void setPassword(String password) {
+        this.password = password;
     }
 
     public Role getRoleID() {
