@@ -1,39 +1,34 @@
 package com.sena.jsonWebToken.service;
 
-import java.security.Key;
 import java.time.LocalDateTime;
-import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 
-import javax.crypto.spec.SecretKeySpec;
-
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataAccessException;
-import org.springframework.security.crypto.bcrypt.BCrypt;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.sena.jsonWebToken.DTO.ResponseDTO;
+import com.sena.jsonWebToken.DTO.ResponseLogin;
 import com.sena.jsonWebToken.DTO.UserDTO;
 import com.sena.jsonWebToken.model.Role;
 import com.sena.jsonWebToken.model.User;
 import com.sena.jsonWebToken.repository.IRole;
 import com.sena.jsonWebToken.repository.IUser;
+import com.sena.jsonWebToken.service.jwt.JwtService;
 
-import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class UserService {
 
-    @Autowired
-    private IUser userRepository;
-
-    private static final String SECRET_KEY = "mi-clave-secreta-muy-segura-no-puedo-creer-por-que-es-tan-segura-guau-guau-oh-oh-oh-me-vengo-que-rico-12345678910-@-@-/";
-
-    @Autowired
-    private IRole roleRepository;
+    private final IUser userRepository;
+    private final IRole roleRepository;
+    private final JwtService jwtService;
+    private final PasswordEncoder passwordEncoder;
 
     // Listar todos los usuarios
     public List<User> findAll() {
@@ -50,7 +45,7 @@ public class UserService {
         return userRepository.existsById(id);
     }
 
-    // Filtrar usuarios por correo y contraseña (ya no usa name ni status)
+    // Filtrar usuarios por email y contraseña
     public List<User> filterUser(String email, String password) {
         return userRepository.filterUser(email, password);
     }
@@ -58,31 +53,28 @@ public class UserService {
     // Registro de usuario
     @Transactional
     public ResponseDTO register(UserDTO userDTO) {
-        // Validar que el rol exista
+        // Validar rol
         Optional<Role> roleEntity = roleRepository.findById(userDTO.getRoleID().getRoleID());
         if (!roleEntity.isPresent()) {
             return new ResponseDTO("error", "Rol no encontrado");
         }
-
-        // Verificar si el correo ya está registrado
+        // Validar existencia de email
         if (userRepository.existsByEmail(userDTO.getEmail())) {
             return new ResponseDTO("error", "El correo electrónico ya está registrado");
         }
-
-        // Validaciones adicionales
+        // Validar formato de email
         if (!userDTO.getEmail().matches("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$")) {
             return new ResponseDTO("error", "El formato del correo electrónico no es válido");
         }
+        // Validar longitud de contraseña
         if (userDTO.getPassword() == null || userDTO.getPassword().length() < 8) {
             return new ResponseDTO("error", "La contraseña debe tener al menos 8 caracteres");
         }
 
         try {
-            // Convertir DTO a entidad y guardar
-            User userEntity = convertToModel(userDTO);
-            userEntity.setRoleID(roleEntity.get());
+            // Encriptar la contraseña antes de guardar el usuario
+            User userEntity = convertToModel(userDTO, roleEntity.get());
             userRepository.save(userEntity);
-
             return new ResponseDTO("success", "Usuario registrado correctamente");
         } catch (DataAccessException e) {
             return new ResponseDTO("error", "Error de base de datos al guardar el usuario");
@@ -92,71 +84,47 @@ public class UserService {
     }
 
     // Inicio de sesión
-    public ResponseDTO login(String email, String password) {
+    public ResponseLogin login(String email, String password) {
         Optional<User> optionalUser = userRepository.findByEmail(email);
         if (!optionalUser.isPresent()) {
-            return new ResponseDTO("error", "El correo electrónico no está registrado");
+            return new ResponseLogin("error", "El correo electrónico no está registrado", null);
         }
 
         User userEntity = optionalUser.get();
 
-        // Verificar la contraseña hasheada (usa BCrypt)
-        if (!BCrypt.checkpw(password, userEntity.getPassword())) {
-            return new ResponseDTO("error", "La contraseña es incorrecta");
+        // Verificar la contraseña hasheada
+        if (!passwordEncoder.matches(password, userEntity.getPassword())) {
+            return new ResponseLogin("error", "La contraseña es incorrecta", null);
         }
 
-        // Generar un token
-        String token = generateToken(userEntity);
+        // Construir UserDetails para JWT
+        UserDetails userDetails = org.springframework.security.core.userdetails.User
+                .withUsername(userEntity.getEmail())
+                .password(userEntity.getPassword())
+                .authorities("ROLE_" + userEntity.getRoleID().getName())
+                .build();
 
-        // Si las credenciales son correctas, devolver un éxito con el token y el usuario
-        return new ResponseDTO("success", "Inicio de sesión exitoso", token, userEntity);
+        // Generar token JWT usando JwtService
+        String token = jwtService.generateToken(userDetails);
+
+        // Devuelve status, message y token
+        userEntity.setPassword(null);
+        return new ResponseLogin("success", "Inicio de sesión exitoso", token);
     }
 
-    private String generateToken(User userEntity) {
-        Key key = new SecretKeySpec(SECRET_KEY.getBytes(), SignatureAlgorithm.HS512.getJcaName());
-        return Jwts.builder()
-                .setSubject(userEntity.getEmail())
-                .setIssuedAt(new Date())
-                .setExpiration(new Date(System.currentTimeMillis() + 3600000)) // 1 hora de validez
-                .signWith(key, SignatureAlgorithm.HS512)
-                .compact();
-    }
-
-    // Eliminar usuario por ID (borrado lógico)
+    // Eliminar usuario por ID (borrado físico)
     @Transactional
-public ResponseDTO deleteById(int id) {
-    if (!userRepository.existsById(id)) {
-        return new ResponseDTO("error", "Usuario no encontrado");
-    }
-
-    try {
-        userRepository.deleteById(id);
-        return new ResponseDTO("success", "Usuario eliminado correctamente");
-    } catch (DataAccessException e) {
-        return new ResponseDTO("error", "Error de base de datos al eliminar el usuario");
-    } catch (Exception e) {
-        return new ResponseDTO("error", "Error inesperado al eliminar el usuario");
-    }
-}
-
-    // Reactivar usuario por ID
-    @Transactional
-    public ResponseDTO reactivateUser(int id) {
-        Optional<User> userEntity = userRepository.findById(id);
-        if (!userEntity.isPresent()) {
+    public ResponseDTO deleteById(int id) {
+        if (!userRepository.existsById(id)) {
             return new ResponseDTO("error", "Usuario no encontrado");
         }
-
         try {
-            User userToReactivate = userEntity.get();
-            // Si usas reactivación lógica, aquí podrías implementar un campo extra (por ejemplo, isDeleted)
-            userRepository.save(userToReactivate);
-
-            return new ResponseDTO("success", "Usuario reactivado correctamente");
+            userRepository.deleteById(id);
+            return new ResponseDTO("success", "Usuario eliminado correctamente");
         } catch (DataAccessException e) {
-            return new ResponseDTO("error", "Error de base de datos al reactivar el usuario");
+            return new ResponseDTO("error", "Error de base de datos al eliminar el usuario");
         } catch (Exception e) {
-            return new ResponseDTO("error", "Error inesperado al reactivar el usuario");
+            return new ResponseDTO("error", "Error inesperado al eliminar el usuario");
         }
     }
 
@@ -164,20 +132,19 @@ public ResponseDTO deleteById(int id) {
     @Transactional
     public ResponseDTO update(int id, UserDTO userDTO) {
         Optional<User> userOptional = userRepository.findById(id);
-
         if (!userOptional.isPresent()) {
             return new ResponseDTO("error", "Usuario no encontrado");
         }
-
         try {
             User userEntity = userOptional.get();
 
-            // Validar que el rol exista
+            // Validar rol
             Optional<Role> roleEntity = roleRepository.findById(userDTO.getRoleID().getRoleID());
             if (!roleEntity.isPresent()) {
                 return new ResponseDTO("error", "Rol no encontrado");
             }
 
+            // Actualizar email si aplica
             if (userDTO.getEmail() != null && !userDTO.getEmail().isEmpty()) {
                 if (!userDTO.getEmail().matches("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$")) {
                     return new ResponseDTO("error", "El formato del correo electrónico no es válido");
@@ -185,11 +152,13 @@ public ResponseDTO deleteById(int id) {
                 userEntity.setEmail(userDTO.getEmail());
             }
 
+            // Actualizar password si aplica
             if (userDTO.getPassword() != null && !userDTO.getPassword().isEmpty()) {
                 if (userDTO.getPassword().length() < 8) {
                     return new ResponseDTO("error", "La contraseña debe tener al menos 8 caracteres");
                 }
-                userEntity.setPassword(BCrypt.hashpw(userDTO.getPassword(), BCrypt.gensalt()));
+                // Encriptar la nueva contraseña antes de guardarla
+                userEntity.setPassword(passwordEncoder.encode(userDTO.getPassword()));
             }
 
             userEntity.setRoleID(roleEntity.get());
@@ -203,27 +172,22 @@ public ResponseDTO deleteById(int id) {
         }
     }
 
-    // Convertir entidad a DTO
+    // Convertir entidad a DTO (nunca expone la contraseña)
     public UserDTO convertToDTO(User userEntity) {
         return new UserDTO(
                 userEntity.getEmail(),
-                userEntity.getPassword(),
+                null,
                 userEntity.getRoleID()
         );
     }
 
-    // Convertir DTO a entidad
-    public User convertToModel(UserDTO userDTO) {
-        Optional<Role> roleEntity = roleRepository.findById(userDTO.getRoleID().getRoleID());
-        if (!roleEntity.isPresent()) {
-            throw new IllegalArgumentException("Rol no encontrado");
-        }
-
+    // Convertir DTO a entidad, encriptando la contraseña
+    public User convertToModel(UserDTO userDTO, Role role) {
         return new User(
                 0, // ID autogenerado
                 userDTO.getEmail(),
-                BCrypt.hashpw(userDTO.getPassword(), BCrypt.gensalt()),
-                roleEntity.get(),
+                passwordEncoder.encode(userDTO.getPassword()),
+                role,
                 LocalDateTime.now()
         );
     }

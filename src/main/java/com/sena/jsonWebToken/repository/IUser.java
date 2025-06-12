@@ -11,9 +11,6 @@ import com.sena.jsonWebToken.model.User;
 
 public interface IUser extends JpaRepository<User, Integer> {
 
-    @Query("SELECT u FROM User u")
-    List<User> getListUserActive();
-
     @Query("""
         SELECT u
         FROM User u
